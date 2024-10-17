@@ -138,6 +138,67 @@
 //! # }
 //! ```
 //!
+//! ### Manual Cache Invalidation
+//! This middleware allows manual cache invalidation by setting the `X-Invalidate-Cache` header in the request. This can be useful when you know the underlying data has changed and you want to force a fresh pull of data.
+//! ```rust
+//! use axum::{
+//!     body::Body,
+//!     extract::Path,
+//!     http::status::StatusCode,
+//!     http::Request,
+//!     Router,
+//!     routing::get,
+//! };
+//! use axum_response_cache::CacheLayer;
+//! use tower::Service as _;
+//!
+//! async fn handler(Path(name): Path<String>) -> (StatusCode, String) {
+//!     (StatusCode::OK, format!("Hello, {name}"))
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let mut router = Router::new()
+//!     .route("/hello/:name", get(handler))
+//!     .layer(CacheLayer::with_lifespan(60).allow_invalidation());
+//!
+//! // first request will fire handler and get the response
+//! let status1 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status1);
+//!
+//! // second request should return the cached response
+//! let status2 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status2);
+//!
+//! // third request with X-Invalidate-Cache header to invalidate the cache
+//! let status3 = router.call(
+//!     Request::get("/hello/foo")
+//!         .header("X-Invalidate-Cache", "true")
+//!         .body(Body::empty())
+//!         .unwrap(),
+//!     )
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status3);
+//!
+//! // fourth request to verify that the handler is called again
+//! let status4 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status4);
+//! # }
+//! ```
+//!
+//! Cache invalidation could be dangerous because it can allow a user to force the server to make a request to an external service or database. It is disabled by default, but can be enabled by calling the [`allow_invalidation`] method on the [`CacheLayer`].
+//!
 //! ## Using custom cache
 //!
 //! ```rust
@@ -213,6 +274,7 @@ pub struct CacheLayer<C> {
     cache: Arc<Mutex<C>>,
     use_stale: bool,
     limit: usize,
+    allow_invalidation: bool,
 }
 
 impl<C> CacheLayer<C>
@@ -225,6 +287,7 @@ where
             cache: Arc::new(Mutex::new(cache)),
             use_stale: false,
             limit: 128 * 1024 * 1024,
+            allow_invalidation: false,
         }
     }
 
@@ -246,6 +309,15 @@ where
             ..self
         }
     }
+
+    /// Allow manual cache invalidation by setting the `X-Invalidate-Cache` header in the request.
+    /// This will allow the cache to be invalidated for the given key.
+    pub fn allow_invalidation(self) -> Self {
+        Self {
+            allow_invalidation: true,
+            ..self
+        }
+    }
 }
 
 impl CacheLayer<TimedCache<Key, CachedResponse>> {
@@ -264,6 +336,7 @@ impl<S, C> Layer<S> for CacheLayer<C> {
             cache: Arc::clone(&self.cache),
             use_stale: self.use_stale,
             limit: self.limit,
+            allow_invalidation: self.allow_invalidation,
         }
     }
 }
@@ -274,6 +347,7 @@ pub struct CacheService<S, C> {
     cache: Arc<Mutex<C>>,
     use_stale: bool,
     limit: usize,
+    allow_invalidation: bool,
 }
 
 impl<S, C> Service<Request<Body>> for CacheService<S, C>
@@ -294,12 +368,13 @@ where
     fn call(&mut self, request: Request<Body>) -> Self::Future {
         let mut inner = self.inner.clone();
         let use_stale = self.use_stale;
+        let allow_invalidation = self.allow_invalidation;
         let limit = self.limit;
         let cache = Arc::clone(&self.cache);
         let key = (request.method().clone(), request.uri().clone());
 
-        // Check for the custom header "X-Invalidate-Cache"
-        if request.headers().contains_key("X-Invalidate-Cache") {
+        // Check for the custom header "X-Invalidate-Cache" if invalidation is allowed
+        if allow_invalidation && request.headers().contains_key("X-Invalidate-Cache") {
             // Manually invalidate the cache for this key
             cache.lock().unwrap().cache_remove(&key);
             debug!("Cache invalidated manually for key {:?}", key);
@@ -570,7 +645,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn should_invalidate_cache() {
+    async fn should_not_invalidate_cache_when_disabled() {
         let handler = |State(cnt): State<Counter>| async move {
             cnt.increment();
             StatusCode::OK
@@ -578,6 +653,59 @@ mod tests {
 
         let counter = Counter::new(0);
         let cache = CacheLayer::with_lifespan(60);
+        let mut router = Router::new()
+            .route("/", get(handler).layer(cache))
+            .with_state(counter.clone());
+
+        // First request to cache the response
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Second request should return the cached response - no increment
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Third request with X-Invalidate-Cache header should not invalidate the cache - no increment
+        let status = router
+            .call(
+                Request::get("/")
+                    .header("X-Invalidate-Cache", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Fourth request should still return the cached response - no increment
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        assert_eq!(1, counter.read(), "handler should’ve been called only once");
+    }
+
+    #[tokio::test]
+    async fn should_invalidate_cache_when_enabled() {
+        let handler = |State(cnt): State<Counter>| async move {
+            cnt.increment();
+            StatusCode::OK
+        };
+
+        let counter = Counter::new(0);
+        let cache = CacheLayer::with_lifespan(60).allow_invalidation();
         let mut router = Router::new()
             .route("/", get(handler).layer(cache))
             .with_state(counter.clone());
