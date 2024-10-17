@@ -805,7 +805,7 @@ mod tests {
             .unwrap();
         assert!(response.status().is_success(), "handler should return success");
         assert!(
-            response.headers().get("Age").is_none(),
+            response.headers().get("X-Cache-Age").is_none(),
             "Age header should not be present"
         );
 
@@ -834,7 +834,7 @@ mod tests {
 
         // Age should be 0
         assert_eq!(
-            response.headers().get("Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            response.headers().get("X-Cache-Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
             "0",
             "Age header should be present and equal to 0"
         );
@@ -847,7 +847,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response.headers().get("Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            response.headers().get("X-Cache-Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
             "2",
             "Age header should be present and equal to 2"
         );
