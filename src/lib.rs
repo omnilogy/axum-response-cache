@@ -197,7 +197,7 @@
 //! # }
 //! ```
 //!
-//! Cache invalidation could be dangerous because it can allow a user to force the server to make a request to an external service or database. It is disabled by default, but can be enabled by calling the [`allow_invalidation`] method on the [`CacheLayer`].
+//! Cache invalidation could be dangerous because it can allow a user to force the server to make a request to an external service or database. It is disabled by default, but can be enabled by calling the [`CacheLayer::allow_invalidation`] method.
 //!
 //! ## Using custom cache
 //!
@@ -268,7 +268,9 @@ impl IntoResponse for CachedResponse {
         let mut response = Response::from_parts(self.parts, Body::from(self.body));
         if let Some(timestamp) = self.timestamp {
             let age = timestamp.elapsed().as_secs();
-            response.headers_mut().insert("X-Cache-Age", age.to_string().parse().unwrap());
+            response
+                .headers_mut()
+                .insert("X-Cache-Age", age.to_string().parse().unwrap());
         }
         response
     }
@@ -281,7 +283,7 @@ pub struct CacheLayer<C> {
     use_stale: bool,
     limit: usize,
     allow_invalidation: bool,
-    allow_response_headers: bool,
+    add_response_headers: bool,
 }
 
 impl<C> CacheLayer<C>
@@ -295,7 +297,7 @@ where
             use_stale: false,
             limit: 128 * 1024 * 1024,
             allow_invalidation: false,
-            allow_response_headers: false,
+            add_response_headers: false,
         }
     }
 
@@ -328,9 +330,9 @@ where
     }
 
     /// Allow the response headers to be included in the cached response.
-    pub fn allow_response_headers(self) -> Self {
+    pub fn add_response_headers(self) -> Self {
         Self {
-            allow_response_headers: true,
+            add_response_headers: true,
             ..self
         }
     }
@@ -353,7 +355,7 @@ impl<S, C> Layer<S> for CacheLayer<C> {
             use_stale: self.use_stale,
             limit: self.limit,
             allow_invalidation: self.allow_invalidation,
-            allow_response_headers: self.allow_response_headers,
+            add_response_headers: self.add_response_headers,
         }
     }
 }
@@ -365,7 +367,7 @@ pub struct CacheService<S, C> {
     use_stale: bool,
     limit: usize,
     allow_invalidation: bool,
-    allow_response_headers: bool,
+    add_response_headers: bool,
 }
 
 impl<S, C> Service<Request<Body>> for CacheService<S, C>
@@ -387,7 +389,7 @@ where
         let mut inner = self.inner.clone();
         let use_stale = self.use_stale;
         let allow_invalidation = self.allow_invalidation;
-        let allow_response_headers = self.allow_response_headers;
+        let add_response_headers = self.add_response_headers;
         let limit = self.limit;
         let cache = Arc::clone(&self.cache);
         let key = (request.method().clone(), request.uri().clone());
@@ -419,7 +421,7 @@ where
                 (Some(stale_value), true) => {
                     let response = inner_fut.await.unwrap();
                     if response.status().is_success() {
-                        Ok(update_cache(&cache, key, response, limit, allow_response_headers).await)
+                        Ok(update_cache(&cache, key, response, limit, add_response_headers).await)
                     } else if use_stale {
                         debug!("Returning stale value.");
                         Ok(stale_value.into_response())
@@ -432,7 +434,7 @@ where
                 (None, _) => {
                     let response = inner_fut.await.unwrap();
                     if response.status().is_success() {
-                        Ok(update_cache(&cache, key, response, limit, allow_response_headers).await)
+                        Ok(update_cache(&cache, key, response, limit, add_response_headers).await)
                     } else {
                         Ok(response)
                     }
@@ -448,7 +450,7 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
     key: Key,
     response: Response,
     limit: usize,
-    allow_response_headers: bool,
+    add_response_headers: bool,
 ) -> Response {
     let (parts, body) = response.into_parts();
     let Ok(body) = axum::body::to_bytes(body, limit).await else {
@@ -461,7 +463,7 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
     let value = CachedResponse {
         parts,
         body,
-        timestamp: if allow_response_headers {
+        timestamp: if add_response_headers {
             Some(std::time::Instant::now())
         } else {
             None
@@ -796,14 +798,20 @@ mod tests {
             .call(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert!(response.status().is_success(), "handler should return success");
+        assert!(
+            response.status().is_success(),
+            "handler should return success"
+        );
 
         // Second request should return the cached response
         let response = router
             .call(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert!(response.status().is_success(), "handler should return success");
+        assert!(
+            response.status().is_success(),
+            "handler should return success"
+        );
         assert!(
             response.headers().get("X-Cache-Age").is_none(),
             "Age header should not be present"
@@ -820,7 +828,7 @@ mod tests {
         };
 
         let counter = Counter::new(0);
-        let cache = CacheLayer::with_lifespan(60).allow_response_headers();
+        let cache = CacheLayer::with_lifespan(60).add_response_headers();
         let mut router = Router::new()
             .route("/", get(handler).layer(cache))
             .with_state(counter.clone());
@@ -830,11 +838,18 @@ mod tests {
             .call(Request::get("/").body(Body::empty()).unwrap())
             .await
             .unwrap();
-        assert!(response.status().is_success(), "handler should return success");
+        assert!(
+            response.status().is_success(),
+            "handler should return success"
+        );
 
         // Age should be 0
         assert_eq!(
-            response.headers().get("X-Cache-Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            response
+                .headers()
+                .get("X-Cache-Age")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
             "0",
             "Age header should be present and equal to 0"
         );
@@ -847,7 +862,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            response.headers().get("X-Cache-Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            response
+                .headers()
+                .get("X-Cache-Age")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or(""),
             "2",
             "Age header should be present and equal to 2"
         );
