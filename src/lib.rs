@@ -260,11 +260,17 @@ type Key = (axum::http::Method, axum::http::Uri);
 pub struct CachedResponse {
     parts: Parts,
     body: Bytes,
+    timestamp: Option<std::time::Instant>,
 }
 
 impl IntoResponse for CachedResponse {
     fn into_response(self) -> Response {
-        Response::from_parts(self.parts, Body::from(self.body))
+        let mut response = Response::from_parts(self.parts, Body::from(self.body));
+        if let Some(timestamp) = self.timestamp {
+            let age = timestamp.elapsed().as_secs();
+            response.headers_mut().insert("Age", age.to_string().parse().unwrap());
+        }
+        response
     }
 }
 
@@ -275,6 +281,7 @@ pub struct CacheLayer<C> {
     use_stale: bool,
     limit: usize,
     allow_invalidation: bool,
+    allow_response_headers: bool,
 }
 
 impl<C> CacheLayer<C>
@@ -288,6 +295,7 @@ where
             use_stale: false,
             limit: 128 * 1024 * 1024,
             allow_invalidation: false,
+            allow_response_headers: false,
         }
     }
 
@@ -318,6 +326,14 @@ where
             ..self
         }
     }
+
+    /// Allow the response headers to be included in the cached response.
+    pub fn allow_response_headers(self) -> Self {
+        Self {
+            allow_response_headers: true,
+            ..self
+        }
+    }
 }
 
 impl CacheLayer<TimedCache<Key, CachedResponse>> {
@@ -337,6 +353,7 @@ impl<S, C> Layer<S> for CacheLayer<C> {
             use_stale: self.use_stale,
             limit: self.limit,
             allow_invalidation: self.allow_invalidation,
+            allow_response_headers: self.allow_response_headers,
         }
     }
 }
@@ -348,6 +365,7 @@ pub struct CacheService<S, C> {
     use_stale: bool,
     limit: usize,
     allow_invalidation: bool,
+    allow_response_headers: bool,
 }
 
 impl<S, C> Service<Request<Body>> for CacheService<S, C>
@@ -369,6 +387,7 @@ where
         let mut inner = self.inner.clone();
         let use_stale = self.use_stale;
         let allow_invalidation = self.allow_invalidation;
+        let allow_response_headers = self.allow_response_headers;
         let limit = self.limit;
         let cache = Arc::clone(&self.cache);
         let key = (request.method().clone(), request.uri().clone());
@@ -400,7 +419,7 @@ where
                 (Some(stale_value), true) => {
                     let response = inner_fut.await.unwrap();
                     if response.status().is_success() {
-                        Ok(update_cache(&cache, key, response, limit).await)
+                        Ok(update_cache(&cache, key, response, limit, allow_response_headers).await)
                     } else if use_stale {
                         debug!("Returning stale value.");
                         Ok(stale_value.into_response())
@@ -413,7 +432,7 @@ where
                 (None, _) => {
                     let response = inner_fut.await.unwrap();
                     if response.status().is_success() {
-                        Ok(update_cache(&cache, key, response, limit).await)
+                        Ok(update_cache(&cache, key, response, limit, allow_response_headers).await)
                     } else {
                         Ok(response)
                     }
@@ -429,6 +448,7 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
     key: Key,
     response: Response,
     limit: usize,
+    allow_response_headers: bool,
 ) -> Response {
     let (parts, body) = response.into_parts();
     let Ok(body) = axum::body::to_bytes(body, limit).await else {
@@ -438,7 +458,15 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
         )
             .into_response();
     };
-    let value = CachedResponse { parts, body };
+    let value = CachedResponse {
+        parts,
+        body,
+        timestamp: if allow_response_headers {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        },
+    };
     {
         cache.lock().unwrap().cache_set(key, value.clone());
     }
@@ -748,5 +776,82 @@ mod tests {
         assert!(status.is_success(), "handler should return success");
 
         assert_eq!(2, counter.read(), "handler should’ve been called twice");
+    }
+
+    #[tokio::test]
+    async fn should_not_include_age_header_when_disabled() {
+        let handler = |State(cnt): State<Counter>| async move {
+            cnt.increment();
+            StatusCode::OK
+        };
+
+        let counter = Counter::new(0);
+        let cache = CacheLayer::with_lifespan(60);
+        let mut router = Router::new()
+            .route("/", get(handler).layer(cache))
+            .with_state(counter.clone());
+
+        // First request to cache the response
+        let response = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "handler should return success");
+
+        // Second request should return the cached response
+        let response = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "handler should return success");
+        assert!(
+            response.headers().get("Age").is_none(),
+            "Age header should not be present"
+        );
+
+        assert_eq!(1, counter.read(), "handler should’ve been called only once");
+    }
+
+    #[tokio::test]
+    async fn should_include_age_header_when_enabled() {
+        let handler = |State(cnt): State<Counter>| async move {
+            cnt.increment();
+            StatusCode::OK
+        };
+
+        let counter = Counter::new(0);
+        let cache = CacheLayer::with_lifespan(60).allow_response_headers();
+        let mut router = Router::new()
+            .route("/", get(handler).layer(cache))
+            .with_state(counter.clone());
+
+        // First request to cache the response
+        let response = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert!(response.status().is_success(), "handler should return success");
+
+        // Age should be 0
+        assert_eq!(
+            response.headers().get("Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            "0",
+            "Age header should be present and equal to 0"
+        );
+        // wait over 2s to age the cache
+        tokio::time::sleep(tokio::time::Duration::from_millis(2100)).await;
+        // Second request should return the cached response
+        let response = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            response.headers().get("Age").and_then(|v| v.to_str().ok()).unwrap_or(""),
+            "2",
+            "Age header should be present and equal to 2"
+        );
+
+        assert_eq!(1, counter.read(), "handler should’ve been called only once");
     }
 }
