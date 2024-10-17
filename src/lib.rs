@@ -268,7 +268,7 @@ impl IntoResponse for CachedResponse {
         let mut response = Response::from_parts(self.parts, Body::from(self.body));
         if let Some(timestamp) = self.timestamp {
             let age = timestamp.elapsed().as_secs();
-            response.headers_mut().insert("Age", age.to_string().parse().unwrap());
+            response.headers_mut().insert("X-Cache-Age", age.to_string().parse().unwrap());
         }
         response
     }
