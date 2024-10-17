@@ -297,6 +297,14 @@ where
         let limit = self.limit;
         let cache = Arc::clone(&self.cache);
         let key = (request.method().clone(), request.uri().clone());
+
+        // Check for the custom header "X-Invalidate-Cache"
+        if request.headers().contains_key("X-Invalidate-Cache") {
+            // Manually invalidate the cache for this key
+            cache.lock().unwrap().cache_remove(&key);
+            debug!("Cache invalidated manually for key {:?}", key);
+        }
+
         let inner_fut = inner
             .call(request)
             .instrument(tracing::info_span!("inner_service"));
@@ -559,5 +567,58 @@ mod tests {
             counter.read(),
             "handler should’ve been called for all requests"
         );
+    }
+
+    #[tokio::test]
+    async fn should_invalidate_cache() {
+        let handler = |State(cnt): State<Counter>| async move {
+            cnt.increment();
+            StatusCode::OK
+        };
+
+        let counter = Counter::new(0);
+        let cache = CacheLayer::with_lifespan(60);
+        let mut router = Router::new()
+            .route("/", get(handler).layer(cache))
+            .with_state(counter.clone());
+
+        // First request to cache the response
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Second request should return the cached response - no increment
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Third request with X-Invalidate-Cache header to invalidate the cache
+        let status = router
+            .call(
+                Request::get("/")
+                    .header("X-Invalidate-Cache", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        // Fourth request to verify that the handler is called again
+        let status = router
+            .call(Request::get("/").body(Body::empty()).unwrap())
+            .await
+            .unwrap()
+            .status();
+        assert!(status.is_success(), "handler should return success");
+
+        assert_eq!(2, counter.read(), "handler should’ve been called twice");
     }
 }
