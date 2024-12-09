@@ -3,16 +3,16 @@ name = "axum-response-cache"
 description = "Axum layer for caching HTTP responses of the wrapped server"
 keywords = ["axum", "middleware", "caching", "http"]
 categories = ["web-programming::http-server", "caching"]
-repository = "https://github.com/omnilogy/axum-response-cache"
+repository = "https://github.com/omniscopy/axum-response-cache"
 readme = "README.md"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 authors = ["Omniscopy Dev Team <dev@omniscopy.com>", "Benedykt Jaworski <benedykt.jaworski@omniscopy.com>"]
 license = "MIT"
 
 [dependencies]
 axum = { version = "0.7.7", default-features = false }
-cached = "0.53.1"
+cached = "0.54"
 http = "1.1.0"
 tower = "0.5.1"
 tracing = "0.1.40"
