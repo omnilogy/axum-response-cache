@@ -20,7 +20,9 @@
 //!
 //! To cache a response over a specific route, just wrap it in a [`CacheLayer`]:
 //!
+//! Axum 0.7.x
 //! ```rust,no_run
+//! use axum_07 as axum;
 //! use axum::{Router, extract::Path, routing::get};
 //! use axum_response_cache::CacheLayer;
 //!
@@ -39,9 +41,32 @@
 //! }
 //! ```
 //!
+//! Axum 0.8.x
+//! ```rust,no_run
+//! use axum_08 as axum;
+//! use axum::{Router, extract::Path, routing::get};
+//! use axum_response_cache::CacheLayer;
+//!
+//! #[tokio::main]
+//! async fn main() {
+//!     let mut router = Router::new()
+//!         .route(
+//!             "/hello/{name}",
+//!             get(|Path(name): Path<String>| async move { format!("Hello, {name}!") })
+//!                 // this will cache responses with each `:name` for 60 seconds.
+//!                 .layer(CacheLayer::with_lifespan(60)),
+//!         );
+//!
+//!     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+//!     axum::serve(listener, router).await.unwrap();
+//! }
+//! ```
+//!
 //! ### Reusing last successful response
+//! Axum 0.7.x
 //! ```rust
 //! # use std::sync::atomic::{AtomicBool, Ordering};
+//! use axum_07 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -87,6 +112,54 @@
 //! # }
 //! ```
 //!
+//! Axum 0.8.x
+//! ```rust
+//! # use std::sync::atomic::{AtomicBool, Ordering};
+//! use axum_08 as axum;
+//! use axum::{
+//!     body::Body,
+//!     extract::Path,
+//!     http::status::StatusCode,
+//!     http::Request,
+//!     Router,
+//!     routing::get,
+//! };
+//! use axum_response_cache::CacheLayer;
+//! use tower::Service as _;
+//!
+//! // a handler that returns 200 OK only the first time it’s called
+//! async fn handler(Path(name): Path<String>) -> (StatusCode, String) {
+//!     static FIRST_RUN: AtomicBool = AtomicBool::new(true);
+//!     let first_run = FIRST_RUN.swap(false, Ordering::AcqRel);
+//!
+//!     if first_run {
+//!         (StatusCode::OK, format!("Hello, {name}"))
+//!     } else {
+//!         (StatusCode::INTERNAL_SERVER_ERROR, String::from("Error!"))
+//!     }
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let mut router = Router::new()
+//!     .route("/hello/{name}", get(handler))
+//!     .layer(CacheLayer::with_lifespan(60).use_stale_on_failure());
+//!
+//! // first request will fire handler and get the response
+//! let status1 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status1);
+//!
+//! // second request will reuse the last response since the handler now returns ISE
+//! let status2 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status2);
+//! # }
+//! ```
 //! ### Serving static files
 //! This middleware can be used to cache files served in memory to limit hard drive load on the
 //! server. To serve files you can use [`tower-http::services::ServeDir`](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html) layer.
@@ -95,7 +168,9 @@
 //! ```
 //!
 //! ### Limiting the body size
+//! Axum 0.7.x
 //! ```rust
+//! use axum_07 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -138,9 +213,55 @@
 //! # }
 //! ```
 //!
+//! Axum 0.8.x
+//! ```rust
+//! use axum_08 as axum;
+//! use axum::{
+//!     body::Body,
+//!     extract::Path,
+//!     http::status::StatusCode,
+//!     http::Request,
+//!     Router,
+//!     routing::get,
+//! };
+//! use axum_response_cache::CacheLayer;
+//! use tower::Service as _;
+//!
+//! // returns a short string, well below the limit
+//! async fn ok_handler() -> &'static str {
+//!     "ok"
+//! }
+//!
+//! async fn too_long_handler() -> &'static str {
+//!     "a response that is well beyond the limit of the cache!"
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let mut router = Router::new()
+//!     .route("/ok", get(ok_handler))
+//!     .route("/too_long", get(too_long_handler))
+//!     // limit max cached body to only 16 bytes
+//!     .layer(CacheLayer::with_lifespan(60).body_limit(16));
+//!
+//! let status_ok = router.call(Request::get("/ok").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status_ok);
+//!
+//! let status_too_long = router.call(Request::get("/too_long").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status_too_long);
+//! # }
+//! ```
 //! ### Manual Cache Invalidation
 //! This middleware allows manual cache invalidation by setting the `X-Invalidate-Cache` header in the request. This can be useful when you know the underlying data has changed and you want to force a fresh pull of data.
+//! Axum 0.7.x
 //! ```rust
+//! use axum_07 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -197,11 +318,92 @@
 //! # }
 //! ```
 //!
+//! Axum 0.8.x
+//! ```rust
+//! use axum_08 as axum;
+//! use axum::{
+//!     body::Body,
+//!     extract::Path,
+//!     http::status::StatusCode,
+//!     http::Request,
+//!     Router,
+//!     routing::get,
+//! };
+//! use axum_response_cache::CacheLayer;
+//! use tower::Service as _;
+//!
+//! async fn handler(Path(name): Path<String>) -> (StatusCode, String) {
+//!     (StatusCode::OK, format!("Hello, {name}"))
+//! }
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let mut router = Router::new()
+//!     .route("/hello/{name}", get(handler))
+//!     .layer(CacheLayer::with_lifespan(60).allow_invalidation());
+//!
+//! // first request will fire handler and get the response
+//! let status1 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status1);
+//!
+//! // second request should return the cached response
+//! let status2 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status2);
+//!
+//! // third request with X-Invalidate-Cache header to invalidate the cache
+//! let status3 = router.call(
+//!     Request::get("/hello/foo")
+//!         .header("X-Invalidate-Cache", "true")
+//!         .body(Body::empty())
+//!         .unwrap(),
+//!     )
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status3);
+//!
+//! // fourth request to verify that the handler is called again
+//! let status4 = router.call(Request::get("/hello/foo").body(Body::empty()).unwrap())
+//!     .await
+//!     .unwrap()
+//!     .status();
+//! assert_eq!(StatusCode::OK, status4);
+//! # }
+//! ```
 //! Cache invalidation could be dangerous because it can allow a user to force the server to make a request to an external service or database. It is disabled by default, but can be enabled by calling the [`CacheLayer::allow_invalidation`] method.
 //!
 //! ## Using custom cache
 //!
+//! Axum 0.7.x
 //! ```rust
+//! use axum_07 as axum;
+//! use axum::{Router, routing::get};
+//! use axum_response_cache::CacheLayer;
+//! // let’s use TimedSizedCache here
+//! use cached::stores::TimedSizedCache;
+//! # use axum::{body::Body, http::Request};
+//! # use tower::ServiceExt;
+//!
+//! # #[tokio::main]
+//! # async fn main() {
+//! let router: Router = Router::new()
+//!     .route("/hello", get(|| async { "Hello, world!" }))
+//!     // cache maximum value of 50 responses for one minute
+//!     .layer(CacheLayer::with(TimedSizedCache::with_size_and_lifespan(50, 60)));
+//! # // force type inference to resolve the exact type of router
+//! #     let _ = router.oneshot(Request::get("/hello").body(Body::empty()).unwrap()).await;
+//! # }
+//! ```
+//!
+//! Axum 0.8.x
+//! ```rust
+//! use axum_08 as axum;
 //! use axum::{Router, routing::get};
 //! use axum_response_cache::CacheLayer;
 //! // let’s use TimedSizedCache here
