@@ -240,11 +240,24 @@ use std::{
 };
 use tracing_futures::Instrument as _;
 
-use axum::{
+#[cfg(feature = "axum07")]
+use axum_07::{
     body::{Body, Bytes},
     http::{response::Parts, Request, StatusCode},
     response::{IntoResponse, Response},
 };
+#[cfg(feature = "axum07")]
+use axum_07::body;
+
+#[cfg(feature = "axum08")]
+use axum_08::{
+    body::{Body, Bytes},
+    http::{response::Parts, Request, StatusCode},
+    response::{IntoResponse, Response},
+};
+#[cfg(feature = "axum08")]
+use axum_08::body;
+
 use cached::{Cached, CloneCached, TimedCache};
 use tower::{Layer, Service};
 use tracing::{debug, instrument};
@@ -253,7 +266,7 @@ use tracing::{debug, instrument};
 ///
 /// The responses are cached according to the HTTP method [`axum::http::Method`]) and path
 /// ([`axum::http::Uri`]) of the request they responded to.
-type Key = (axum::http::Method, axum::http::Uri);
+type Key = (http::Method, http::Uri);
 
 /// The struct preserving all the headers and body of the cached response.
 #[derive(Clone, Debug)]
@@ -453,7 +466,7 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
     add_response_headers: bool,
 ) -> Response {
     let (parts, body) = response.into_parts();
-    let Ok(body) = axum::body::to_bytes(body, limit).await else {
+    let Ok(body) = body::to_bytes(body, limit).await else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("File too big, over {limit} bytes"),
@@ -481,12 +494,22 @@ mod tests {
     use rand::Rng;
     use std::sync::atomic::{AtomicIsize, Ordering};
 
-    use axum::{
+    #[cfg(feature = "axum07")]
+    use axum_08::{
         extract::State,
         http::{Request, StatusCode},
         routing::get,
         Router,
     };
+
+    #[cfg(feature = "axum08")]
+    use axum_08::{
+        extract::State,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
+
     use tower::Service;
 
     #[derive(Clone, Debug)]
