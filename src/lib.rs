@@ -443,22 +443,22 @@ use std::{
 use tracing_futures::Instrument as _;
 
 #[cfg(feature = "axum07")]
+use axum_07::body;
+#[cfg(feature = "axum07")]
 use axum_07::{
     body::{Body, Bytes},
     http::{response::Parts, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-#[cfg(feature = "axum07")]
-use axum_07::body;
 
+#[cfg(feature = "axum08")]
+use axum_08::body;
 #[cfg(feature = "axum08")]
 use axum_08::{
     body::{Body, Bytes},
     http::{response::Parts, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-#[cfg(feature = "axum08")]
-use axum_08::body;
 
 use cached::{Cached, CloneCached, TimedCache};
 use tower::{Layer, Service};
