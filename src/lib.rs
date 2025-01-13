@@ -28,7 +28,7 @@
 //! async fn main() {
 //!     let mut router = Router::new()
 //!         .route(
-//!             "/hello/:name",
+//!             "/hello/{name}",
 //!             get(|Path(name): Path<String>| async move { format!("Hello, {name}!") })
 //!                 // this will cache responses with each `:name` for 60 seconds.
 //!                 .layer(CacheLayer::with_lifespan(60)),
@@ -40,6 +40,7 @@
 //! ```
 //!
 //! ### Reusing last successful response
+//! 
 //! ```rust
 //! # use std::sync::atomic::{AtomicBool, Ordering};
 //! use axum::{
@@ -68,7 +69,7 @@
 //! # #[tokio::main]
 //! # async fn main() {
 //! let mut router = Router::new()
-//!     .route("/hello/:name", get(handler))
+//!     .route("/hello/{name}", get(handler))
 //!     .layer(CacheLayer::with_lifespan(60).use_stale_on_failure());
 //!
 //! // first request will fire handler and get the response
@@ -86,7 +87,6 @@
 //! assert_eq!(StatusCode::OK, status2);
 //! # }
 //! ```
-//!
 //! ### Serving static files
 //! This middleware can be used to cache files served in memory to limit hard drive load on the
 //! server. To serve files you can use [`tower-http::services::ServeDir`](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html) layer.
@@ -95,6 +95,7 @@
 //! ```
 //!
 //! ### Limiting the body size
+//! 
 //! ```rust
 //! use axum::{
 //!     body::Body,
@@ -137,9 +138,9 @@
 //! assert_eq!(StatusCode::INTERNAL_SERVER_ERROR, status_too_long);
 //! # }
 //! ```
-//!
 //! ### Manual Cache Invalidation
 //! This middleware allows manual cache invalidation by setting the `X-Invalidate-Cache` header in the request. This can be useful when you know the underlying data has changed and you want to force a fresh pull of data.
+//!
 //! ```rust
 //! use axum::{
 //!     body::Body,
@@ -159,7 +160,7 @@
 //! # #[tokio::main]
 //! # async fn main() {
 //! let mut router = Router::new()
-//!     .route("/hello/:name", get(handler))
+//!     .route("/hello/{name}", get(handler))
 //!     .layer(CacheLayer::with_lifespan(60).allow_invalidation());
 //!
 //! // first request will fire handler and get the response
@@ -196,12 +197,12 @@
 //! assert_eq!(StatusCode::OK, status4);
 //! # }
 //! ```
-//!
 //! Cache invalidation could be dangerous because it can allow a user to force the server to make a request to an external service or database. It is disabled by default, but can be enabled by calling the [`CacheLayer::allow_invalidation`] method.
 //!
 //! ## Using custom cache
 //!
 //! ```rust
+//! use axum_08 as axum;
 //! use axum::{Router, routing::get};
 //! use axum_response_cache::CacheLayer;
 //! // let’s use TimedSizedCache here
@@ -230,6 +231,19 @@
 //! In those cases, if the response to identical requests does not change often over time, it might
 //! be desirable to re-use the same responses from memory without re-calculating them – skipping requests to data
 //! bases, external services, reading from disk.
+//!
+//! ### Using Axum 0.7
+//!
+//! By default, this library uses Axum 0.8. However, you can configure it to use Axum 0.7 by enabling the appropriate feature flag in your `Cargo.toml`.
+//!
+//! To use Axum 0.7, add the following to your `Cargo.toml`:
+//!
+//! ```toml
+//! [dependencies]
+//! axum-response-cache = { version = "0.1.2", features = ["axum07"], default-features = false }
+//! ```
+//!
+//! This will disable the default Axum 0.8 feature and enable the Axum 0.7 feature instead.
 
 use std::{
     convert::Infallible,
@@ -240,11 +254,19 @@ use std::{
 };
 use tracing_futures::Instrument as _;
 
+#[cfg(feature = "axum07")]
+use axum_07 as axum;
+#[cfg(feature = "axum08")]
+use axum_08 as axum;
+
+use axum::body;
 use axum::{
     body::{Body, Bytes},
     http::{response::Parts, Request, StatusCode},
     response::{IntoResponse, Response},
 };
+
+
 use cached::{Cached, CloneCached, TimedCache};
 use tower::{Layer, Service};
 use tracing::{debug, instrument};
@@ -253,7 +275,7 @@ use tracing::{debug, instrument};
 ///
 /// The responses are cached according to the HTTP method [`axum::http::Method`]) and path
 /// ([`axum::http::Uri`]) of the request they responded to.
-type Key = (axum::http::Method, axum::http::Uri);
+type Key = (http::Method, http::Uri);
 
 /// The struct preserving all the headers and body of the cached response.
 #[derive(Clone, Debug)]
@@ -453,7 +475,7 @@ async fn update_cache<C: Cached<Key, CachedResponse> + CloneCached<Key, CachedRe
     add_response_headers: bool,
 ) -> Response {
     let (parts, body) = response.into_parts();
-    let Ok(body) = axum::body::to_bytes(body, limit).await else {
+    let Ok(body) = body::to_bytes(body, limit).await else {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("File too big, over {limit} bytes"),
@@ -481,12 +503,22 @@ mod tests {
     use rand::Rng;
     use std::sync::atomic::{AtomicIsize, Ordering};
 
-    use axum::{
+    #[cfg(feature = "axum07")]
+    use axum_08::{
         extract::State,
         http::{Request, StatusCode},
         routing::get,
         Router,
     };
+
+    #[cfg(feature = "axum08")]
+    use axum_08::{
+        extract::State,
+        http::{Request, StatusCode},
+        routing::get,
+        Router,
+    };
+
     use tower::Service;
 
     #[derive(Clone, Debug)]

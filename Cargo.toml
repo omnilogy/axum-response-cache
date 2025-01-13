@@ -11,15 +11,22 @@ authors = ["Omniscopy Dev Team <dev@omniscopy.com>", "Benedykt Jaworski <benedyk
 license = "MIT"
 
 [dependencies]
-axum = { version = "0.7.7", default-features = false }
+axum_07 = { package = "axum", version = "^0.7", default-features = false, optional = true}
+axum_08 = { package = "axum", version = "^0.8", default-features = false, optional = true}
 cached = "0.54"
-http = "1.1.0"
-tower = "0.5.1"
-tracing = "0.1.40"
+http = "1.2.0"
+tower = "0.5.2"
+tracing = "0.1.41"
 tracing-futures = "0.2.5"
 
 [dev-dependencies]
-axum = { version = "0.7.7", features = ["tokio"] }
+axum_07 = { package = "axum", version = "^0.7", features = ["tokio"]}
+axum_08 = { package = "axum", version = "^0.8", features = ["tokio"]}
 rand = "0.8.5"
-tokio = { version = "1.40.0", features = ["full"] }
+tokio = { version = "1.42.0", features = ["full"] }
 tower = { version = "0.5.1", features = ["util"] }
+
+[features]
+default = ["axum08"]
+axum07 = ["dep:axum_07"]
+axum08 = ["dep:axum_08"]
