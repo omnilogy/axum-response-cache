@@ -21,6 +21,7 @@
 //! To cache a response over a specific route, just wrap it in a [`CacheLayer`]:
 //!
 //! ```rust,no_run
+//! # use axum_08 as axum;
 //! use axum::{Router, extract::Path, routing::get};
 //! use axum_response_cache::CacheLayer;
 //!
@@ -40,9 +41,10 @@
 //! ```
 //!
 //! ### Reusing last successful response
-//! 
+//!
 //! ```rust
 //! # use std::sync::atomic::{AtomicBool, Ordering};
+//! # use axum_08 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -87,6 +89,7 @@
 //! assert_eq!(StatusCode::OK, status2);
 //! # }
 //! ```
+//!
 //! ### Serving static files
 //! This middleware can be used to cache files served in memory to limit hard drive load on the
 //! server. To serve files you can use [`tower-http::services::ServeDir`](https://docs.rs/tower-http/latest/tower_http/services/struct.ServeDir.html) layer.
@@ -95,8 +98,9 @@
 //! ```
 //!
 //! ### Limiting the body size
-//! 
+//!
 //! ```rust
+//! # use axum_08 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -142,6 +146,7 @@
 //! This middleware allows manual cache invalidation by setting the `X-Invalidate-Cache` header in the request. This can be useful when you know the underlying data has changed and you want to force a fresh pull of data.
 //!
 //! ```rust
+//! # use axum_08 as axum;
 //! use axum::{
 //!     body::Body,
 //!     extract::Path,
@@ -202,7 +207,7 @@
 //! ## Using custom cache
 //!
 //! ```rust
-//! use axum_08 as axum;
+//! # use axum_08 as axum;
 //! use axum::{Router, routing::get};
 //! use axum_response_cache::CacheLayer;
 //! // let’s use TimedSizedCache here
@@ -265,7 +270,6 @@ use axum::{
     http::{response::Parts, Request, StatusCode},
     response::{IntoResponse, Response},
 };
-
 
 use cached::{Cached, CloneCached, TimedCache};
 use tower::{Layer, Service};
@@ -504,15 +508,11 @@ mod tests {
     use std::sync::atomic::{AtomicIsize, Ordering};
 
     #[cfg(feature = "axum07")]
-    use axum_08::{
-        extract::State,
-        http::{Request, StatusCode},
-        routing::get,
-        Router,
-    };
-
+    use axum_07 as axum;
     #[cfg(feature = "axum08")]
-    use axum_08::{
+    use axum_08 as axum;
+
+    use axum::{
         extract::State,
         http::{Request, StatusCode},
         routing::get,
